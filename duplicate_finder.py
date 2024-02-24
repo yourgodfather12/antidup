@@ -58,34 +58,54 @@ class AdvancedDuplicateFileFinder:
 
     def process_files(self, starting_path, duplicates_folder, delete_duplicates):
         try:
-            files = []
+            files_metadata = {}
+            unique_files = []
+            potential_duplicates = []
+
             for root, dirs, filenames in os.walk(starting_path):
                 for filename in filenames:
                     file_path = os.path.join(root, filename)
-                    files.append(file_path)
-            total_files = len(files)
+                    file_stat = os.stat(file_path)
+                    file_size = file_stat.st_size
+                    file_mtime = file_stat.st_mtime
+                    file_metadata = (file_size, file_mtime)
+                    if file_metadata in files_metadata:
+                        files_metadata[file_metadata].append(file_path)
+                    else:
+                        files_metadata[file_metadata] = [file_path]
+                        unique_files.append(file_metadata)
+
+            total_files = sum(len(files) for files in files_metadata.values())
             if total_files == 0:
                 self.display_error("No files found in the specified directory.")
                 return
-            print("Total files:", total_files)  # Debug print
+
             duplicates_found = 0
-            batch_size = 10  # Adjust the batch size as needed
             processed_files = 0
+            for metadata in unique_files:
+                files = files_metadata[metadata]
+                if len(files) == 1:
+                    processed_files += 1
+                    continue
+                elif len(files) > 1:
+                    potential_duplicates.extend(files)
+                    processed_files += len(files)
+                self.root.after(0, self.update_progress, processed_files, total_files)
+
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = {executor.submit(self.process_file, file_path, duplicates_folder, delete_duplicates): file_path for file_path in files}
+                futures = {executor.submit(self.verify_duplicates, file_path, duplicates_folder, delete_duplicates): file_path for file_path in potential_duplicates}
                 for future in concurrent.futures.as_completed(futures):
                     duplicates_found += future.result()
-                    processed_files += 1
-                    if processed_files % batch_size == 0:
-                        self.root.after(0, self.update_progress, duplicates_found, total_files)
-            self.update_progress(duplicates_found, total_files)  # Update progress for remaining files
+
+            self.update_progress(duplicates_found, total_files)
         except Exception as e:
             self.display_error(f"Error processing files: {e}")
 
-    def process_file(self, file_path, duplicates_folder, delete_duplicates):
+    def verify_duplicates(self, file_path, duplicates_folder, delete_duplicates):
         try:
             with open(file_path, "rb") as f:
                 file_hash = hashlib.sha256(f.read()).hexdigest()
+
             if delete_duplicates:
                 if os.path.exists(duplicates_folder):
                     os.remove(file_path)
@@ -93,7 +113,6 @@ class AdvancedDuplicateFileFinder:
                 if not os.path.exists(duplicates_folder):
                     os.makedirs(duplicates_folder)
                 shutil.move(file_path, os.path.join(duplicates_folder, os.path.basename(file_path)))
-            self.results_listbox.insert(tk.END, file_path)  # Add file to results list
             return 1
         except Exception as e:
             return 0
@@ -120,11 +139,11 @@ class AdvancedDuplicateFileFinder:
     def update_status(self, message):
         self.status_var.set(message)
 
-    def update_progress(self, duplicates_found, total_files):
+    def update_progress(self, processed_files, total_files):
         if total_files > 0:
-            progress_percentage = (duplicates_found / total_files) * 100
+            progress_percentage = (processed_files / total_files) * 100
             self.progress_var.set(progress_percentage)
-            self.update_status(f"Scanning completed. Duplicates Found: {duplicates_found}")
+            self.update_status(f"Scanning completed. Duplicates Found: {processed_files}")
         else:
             self.display_error("Total files count is zero.")
 
@@ -138,7 +157,7 @@ class AdvancedDuplicateFileFinder:
         selected_indices = self.results_listbox.curselection()
         for index in selected_indices:
             file_path = self.results_listbox.get(index)
-            os.startfile(file_path)  # Open selected file(s)
+            os.startfile(file_path)
 
 if __name__ == "__main__":
     root = tk.Tk()
