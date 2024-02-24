@@ -54,14 +54,27 @@ class DuplicateFileFinder:
 
     def process_files(self, starting_path, duplicates_folder, delete_duplicates):
         try:
-            total_files = sum(1 for _ in os.scandir(starting_path) if _.is_file())
+            files = []
+            for root, dirs, filenames in os.walk(starting_path):
+                for filename in filenames:
+                    file_path = os.path.join(root, filename)
+                    files.append(file_path)
+            total_files = len(files)
+            if total_files == 0:
+                self.display_error("No files found in the specified directory.")
+                return
+            print("Total files:", total_files)  # Debug print
             duplicates_found = 0
-            for entry in os.scandir(starting_path):
-                if entry.is_file():
-                    file_path = entry.path
-                    duplicates_found += self.process_file(file_path, duplicates_folder, delete_duplicates)
-                    self.progress_var.set((duplicates_found / total_files) * 100)
-                    self.update_status(f"Scanning: {file_path}\nDuplicates Found: {duplicates_found}")
+            batch_size = 10  # Adjust the batch size as needed
+            processed_files = 0
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = {executor.submit(self.process_file, file_path, duplicates_folder, delete_duplicates): file_path for file_path in files}
+                for future in concurrent.futures.as_completed(futures):
+                    duplicates_found += future.result()
+                    processed_files += 1
+                    if processed_files % batch_size == 0:
+                        self.root.after(0, self.update_progress, duplicates_found, total_files)
+            self.update_progress(duplicates_found, total_files)  # Update progress for remaining files
         except Exception as e:
             self.display_error(f"Error processing files: {e}")
 
@@ -97,11 +110,18 @@ class DuplicateFileFinder:
 
         self.progress_var.set(0)
         self.update_status("Scanning...")
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.submit(self.process_files, starting_path, duplicates_folder, delete_duplicates)
+        concurrent.futures.ThreadPoolExecutor().submit(self.process_files, starting_path, duplicates_folder, delete_duplicates)
 
     def update_status(self, message):
         self.status_var.set(message)
+
+    def update_progress(self, duplicates_found, total_files):
+        if total_files > 0:
+            progress_percentage = (duplicates_found / total_files) * 100
+            self.progress_var.set(progress_percentage)
+            self.update_status(f"Scanning completed. Duplicates Found: {duplicates_found}")
+        else:
+            self.display_error("Total files count is zero.")
 
     def display_error(self, message):
         messagebox.showerror("Error", message)
