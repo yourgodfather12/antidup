@@ -5,11 +5,11 @@ import concurrent.futures
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-class DuplicateFileFinder:
+class AdvancedDuplicateFileFinder:
     def __init__(self, root):
         self.root = root
-        self.root.title("Duplicate File Finder")
-        self.root.geometry("800x400")
+        self.root.title("Advanced Duplicate File Finder")
+        self.root.geometry("800x500")
         self.root.configure(bg="#333333")
 
         self.main_frame = ttk.Frame(root, style="Dark.TFrame")
@@ -35,6 +35,10 @@ class DuplicateFileFinder:
         ttk.Label(self.main_frame, text="Progress:", style="Dark.TLabel").grid(row=4, column=0, sticky="w", pady=5)
         self.progress_bar = ttk.Progressbar(self.main_frame, variable=self.progress_var, maximum=100, length=600, mode="determinate")
         self.progress_bar.grid(row=4, column=1, columnspan=3, sticky="ew", pady=5)
+
+        self.results_listbox = tk.Listbox(self.main_frame, selectmode="extended", width=80, height=15)
+        self.results_listbox.grid(row=5, column=0, columnspan=4, pady=10, padx=5, sticky="ew")
+        self.results_listbox.bind("<Double-Button-1>", self.open_file)
 
         self.status_var = tk.StringVar()
         self.status_label = ttk.Label(self.root, textvariable=self.status_var, anchor="w", style="Dark.TLabel")
@@ -89,6 +93,7 @@ class DuplicateFileFinder:
                 if not os.path.exists(duplicates_folder):
                     os.makedirs(duplicates_folder)
                 shutil.move(file_path, os.path.join(duplicates_folder, os.path.basename(file_path)))
+            self.results_listbox.insert(tk.END, file_path)  # Add file to results list
             return 1
         except Exception as e:
             return 0
@@ -129,6 +134,12 @@ class DuplicateFileFinder:
     def scale_text(self, event):
         self.status_label.config(wraplength=self.root.winfo_width()-20)
 
+    def open_file(self, event):
+        selected_indices = self.results_listbox.curselection()
+        for index in selected_indices:
+            file_path = self.results_listbox.get(index)
+            os.startfile(file_path)  # Open selected file(s)
+
 if __name__ == "__main__":
     root = tk.Tk()
     root.style = ttk.Style()
@@ -140,5 +151,5 @@ if __name__ == "__main__":
     root.style.configure("Dark.TButton", background="#555555", foreground="white", font=("Helvetica", 10, "bold"))
     root.style.map("Dark.TButton", background=[("active", "#777777")])
     root.style.configure("Dark.TCheckbutton", background="#333333", foreground="white", font=("Helvetica", 10))
-    app = DuplicateFileFinder(root)
+    app = AdvancedDuplicateFileFinder(root)
     root.mainloop()
