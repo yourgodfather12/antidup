@@ -1,174 +1,158 @@
-import os
+import PySimpleGUI as sg
 import hashlib
-import shutil
+import os
 import concurrent.futures
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from difflib import SequenceMatcher
+from datetime import datetime
+import shutil
 
-class AdvancedDuplicateFileFinder:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Advanced Duplicate File Finder")
-        self.root.geometry("800x500")
-        self.root.configure(bg="#333333")
+def file_hash(file_path, block_size=65536, algorithm='sha256'):
+    """Calculate the hash value of a file."""
+    hash_func = hashlib.new(algorithm)
+    with open(file_path, 'rb') as f:
+        for block in iter(lambda: f.read(block_size), b''):
+            hash_func.update(block)
+    return hash_func.hexdigest()
 
-        self.main_frame = ttk.Frame(root, style="Dark.TFrame")
-        self.main_frame.pack(expand=True, fill="both", padx=20, pady=20)
+def find_duplicates(folder_path, algorithm, progress_callback, window):
+    """Find duplicate files in the specified folder."""
+    hashes = {}
+    total_files = sum(len(files) for _, _, files in os.walk(folder_path))
+    progress_counter = 0
 
-        ttk.Label(self.main_frame, text="Starting Path:", style="Dark.TLabel").grid(row=0, column=0, sticky="w", pady=5)
-        self.starting_path_var = tk.StringVar()
-        ttk.Entry(self.main_frame, textvariable=self.starting_path_var, width=50).grid(row=0, column=1, columnspan=2, sticky="ew", pady=5)
-        ttk.Button(self.main_frame, text="Browse", command=self.browse_folder).grid(row=0, column=3, pady=5)
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        futures = []
+        for root, _, filenames in os.walk(folder_path):
+            for filename in filenames:
+                filepath = os.path.join(root, filename)
+                future = executor.submit(process_file, filepath, algorithm)
+                futures.append(future)
 
-        ttk.Label(self.main_frame, text="Duplicates Folder:", style="Dark.TLabel").grid(row=1, column=0, sticky="w", pady=5)
-        self.duplicates_folder_var = tk.StringVar()
-        ttk.Entry(self.main_frame, textvariable=self.duplicates_folder_var, width=50).grid(row=1, column=1, columnspan=2, sticky="ew", pady=5)
-        ttk.Button(self.main_frame, text="Browse", command=self.browse_duplicates_folder).grid(row=1, column=3, pady=5)
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                file_hash_value, filepath = future.result()
+                if file_hash_value in hashes:
+                    hashes[file_hash_value].append(filepath)
+                else:
+                    hashes[file_hash_value] = [filepath]
 
-        self.delete_duplicates_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self.main_frame, text="Delete Duplicates", variable=self.delete_duplicates_var, style="Dark.TCheckbutton").grid(row=2, column=0, columnspan=4, pady=5)
+                progress_counter += 1
+                progress_callback(progress_counter, total_files, filepath, window)
+            except Exception as e:
+                log_error(e)
 
-        self.process_button = ttk.Button(self.main_frame, text="Start Scan", command=self.start_processing, style="Dark.TButton")
-        self.process_button.grid(row=3, column=0, columnspan=4, pady=10)
+    return hashes
 
-        self.progress_var = tk.DoubleVar()
-        ttk.Label(self.main_frame, text="Progress:", style="Dark.TLabel").grid(row=4, column=0, sticky="w", pady=5)
-        self.progress_bar = ttk.Progressbar(self.main_frame, variable=self.progress_var, maximum=100, length=600, mode="determinate")
-        self.progress_bar.grid(row=4, column=1, columnspan=3, sticky="ew", pady=5)
+def process_file(filepath, algorithm):
+    """Process a single file, calculating its hash value."""
+    try:
+        file_hash_value = file_hash(filepath, algorithm=algorithm)
+        return file_hash_value, filepath
+    except Exception as e:
+        raise e
 
-        self.results_listbox = tk.Listbox(self.main_frame, selectmode="extended", width=80, height=15)
-        self.results_listbox.grid(row=5, column=0, columnspan=4, pady=10, padx=5, sticky="ew")
-        self.results_listbox.bind("<Double-Button-1>", self.open_file)
+def update_progress_bar(progress_counter, total_files, filepath, window):
+    """Update the progress bar and status text."""
+    try:
+        progress_percentage = int(progress_counter / total_files * 100)
+        window["-PROGRESS-"].update_bar(progress_counter, total_files)
+        window["-STATUS-"].update(f"Scanning: {filepath} ({progress_percentage}% complete)")
+    except Exception as e:
+        log_error(e)
 
-        self.status_var = tk.StringVar()
-        self.status_label = ttk.Label(self.root, textvariable=self.status_var, anchor="w", style="Dark.TLabel")
-        self.status_label.pack(side="bottom", fill="x")
+def log_error(error):
+    """Log errors to a text file."""
+    with open("error_log.txt", "a") as f:
+        f.write(f"{datetime.now()} - {error}\n")
 
-        self.main_frame.bind("<Configure>", self.scale_text)
+def compare_files(file1, file2):
+    """Compare two files and calculate their similarity ratio."""
+    with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
+        content1 = f1.read()
+        content2 = f2.read()
+        similarity_ratio = SequenceMatcher(None, content1, content2).ratio()
+    return similarity_ratio
 
-    def browse_folder(self):
-        folder_path = filedialog.askdirectory()
-        if folder_path:
-            self.starting_path_var.set(folder_path)
+def delete_duplicates(duplicates):
+    """Delete duplicate files."""
+    for files in duplicates.values():
+        if len(files) > 1:
+            # Keep the first file and delete the rest
+            for filepath in files[1:]:
+                try:
+                    os.remove(filepath)
+                    sg.Print(f"Deleted: {filepath}")
+                except Exception as e:
+                    log_error(e)
+                    sg.Print(f"Failed to delete: {filepath}")
 
-    def browse_duplicates_folder(self):
-        folder_path = filedialog.askdirectory()
-        if folder_path:
-            self.duplicates_folder_var.set(folder_path)
+def move_duplicates(duplicates, dest_folder):
+    """Move duplicate files to a specified destination folder."""
+    for files in duplicates.values():
+        if len(files) > 1:
+            for filepath in files[1:]:
+                try:
+                    shutil.move(filepath, dest_folder)
+                    sg.Print(f"Moved: {filepath} to {dest_folder}")
+                except Exception as e:
+                    log_error(e)
+                    sg.Print(f"Failed to move: {filepath}")
 
-    def process_files(self, starting_path, duplicates_folder, delete_duplicates):
-        try:
-            files_metadata = {}
-            unique_files = []
-            potential_duplicates = []
+def main():
+    sg.theme("DarkGrey13")
 
-            for root, dirs, filenames in os.walk(starting_path):
-                for filename in filenames:
-                    file_path = os.path.join(root, filename)
-                    file_stat = os.stat(file_path)
-                    file_size = file_stat.st_size
-                    file_mtime = file_stat.st_mtime
-                    file_metadata = (file_size, file_mtime)
-                    if file_metadata in files_metadata:
-                        files_metadata[file_metadata].append(file_path)
-                    else:
-                        files_metadata[file_metadata] = [file_path]
-                        unique_files.append(file_metadata)
+    layout = [
+        [sg.Text("Select a folder to scan for duplicates")],
+        [sg.Input(key="-FOLDER-"), sg.FolderBrowse()],
+        [sg.Text("Hashing Algorithm:"), sg.InputText(default_text="sha256", key="-ALGORITHM-")],
+        [sg.Button("Scan"), sg.Button("Cancel")],
+        [sg.ProgressBar(100, orientation="h", size=(30, 20), key="-PROGRESS-")],
+        [sg.Text("", size=(40, 1), key="-STATUS-")],
+        [sg.Multiline(size=(60, 10), key="-FILE-CONTENT-")],
+        [sg.Button("Save Duplicates", key="-SAVE-")],
+        [sg.Button("Delete Duplicates", key="-DELETE-")],
+        [sg.Button("Move Duplicates", key="-MOVE-"), sg.InputText(key="-DEST-FOLDER-", size=(40, 1)), sg.FolderBrowse(target="-DEST-FOLDER-")]
+    ]
 
-            total_files = sum(len(files) for files in files_metadata.values())
-            if total_files == 0:
-                self.display_error("No files found in the specified directory.")
-                return
+    window = sg.Window("Duplicate Files Finder", layout)
 
-            duplicates_found = 0
-            processed_files = 0
-            for metadata in unique_files:
-                files = files_metadata[metadata]
-                if len(files) == 1:
-                    processed_files += 1
-                    continue
-                elif len(files) > 1:
-                    potential_duplicates.extend(files)
-                    processed_files += len(files)
-                self.root.after(0, self.update_progress, processed_files, total_files)
+    while True:
+        event, values = window.read()
 
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = {executor.submit(self.verify_duplicates, file_path, duplicates_folder, delete_duplicates): file_path for file_path in potential_duplicates}
-                for future in concurrent.futures.as_completed(futures):
-                    duplicates_found += future.result()
-
-            self.update_progress(duplicates_found, total_files)
-        except Exception as e:
-            self.display_error(f"Error processing files: {e}")
-
-    def verify_duplicates(self, file_path, duplicates_folder, delete_duplicates):
-        try:
-            with open(file_path, "rb") as f:
-                file_hash = hashlib.sha256(f.read()).hexdigest()
-
-            if delete_duplicates:
-                if os.path.exists(duplicates_folder):
-                    os.remove(file_path)
+        if event == sg.WINDOW_CLOSED or event == "Cancel":
+            break
+        elif event == "Scan":
+            folder_path = values["-FOLDER-"]
+            algorithm = values["-ALGORITHM-"]
+            if folder_path:
+                window["-STATUS-"].update("Scanning...")
+                window["-FILE-CONTENT-"].update("")
+                progress_bar = window["-PROGRESS-"]
+                progress_bar.update_bar(0, 1)
+                duplicates = find_duplicates(folder_path, algorithm=algorithm, progress_callback=update_progress_bar, window=window)
+                sg.Print("Scan Complete")
             else:
-                if not os.path.exists(duplicates_folder):
-                    os.makedirs(duplicates_folder)
-                shutil.move(file_path, os.path.join(duplicates_folder, os.path.basename(file_path)))
-            return 1
-        except Exception as e:
-            return 0
+                sg.popup("Please select a folder.")
 
-    def start_processing(self):
-        starting_path = self.starting_path_var.get()
-        duplicates_folder = self.duplicates_folder_var.get()
-        delete_duplicates = self.delete_duplicates_var.get()
+        elif event == "-SAVE-":
+            filename = sg.popup_get_file("Save Duplicates List As:", save_as=True, default_extension=".txt")
+            if filename:
+                with open(filename, "w") as f:
+                    f.write("Duplicates found:\n")
+                    for files in duplicates.values():
+                        if len(files) > 1:
+                            f.write("\n".join(files))
+                            f.write("\n\n")
+                sg.popup("Duplicates list saved successfully!")
 
-        if not starting_path:
-            self.display_error("Please select a starting path.")
-            return
-        if not os.path.exists(starting_path):
-            self.display_error("Starting path does not exist.")
-            return
-        if delete_duplicates and not duplicates_folder:
-            self.display_error("Please select a folder for duplicates.")
-            return
+        elif event == "-DELETE-":
+            delete_duplicates(duplicates)
 
-        self.progress_var.set(0)
-        self.update_status("Scanning...")
-        concurrent.futures.ThreadPoolExecutor().submit(self.process_files, starting_path, duplicates_folder, delete_duplicates)
+        elif event == "-MOVE-":
+            dest_folder = values["-DEST-FOLDER-"]
+            move_duplicates(duplicates, dest_folder)
 
-    def update_status(self, message):
-        self.status_var.set(message)
-
-    def update_progress(self, processed_files, total_files):
-        if total_files > 0:
-            progress_percentage = (processed_files / total_files) * 100
-            self.progress_var.set(progress_percentage)
-            self.update_status(f"Scanning completed. Duplicates Found: {processed_files}")
-        else:
-            self.display_error("Total files count is zero.")
-
-    def display_error(self, message):
-        messagebox.showerror("Error", message)
-
-    def scale_text(self, event):
-        self.status_label.config(wraplength=self.root.winfo_width()-20)
-
-    def open_file(self, event):
-        selected_indices = self.results_listbox.curselection()
-        for index in selected_indices:
-            file_path = self.results_listbox.get(index)
-            os.startfile(file_path)
+    window.close()
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    root.style = ttk.Style()
-    root.style.theme_use("clam")
-    root.style.configure("Dark.TFrame", background="#333333")
-    root.style.configure("Dark.TLabel", background="#333333", foreground="white")
-    root.style.configure("Dark.TEntry", background="#555555", foreground="white")
-    root.style.map("Dark.TEntry", fieldbackground=[("readonly", "#555555"), ("focus", "#555555")])
-    root.style.configure("Dark.TButton", background="#555555", foreground="white", font=("Helvetica", 10, "bold"))
-    root.style.map("Dark.TButton", background=[("active", "#777777")])
-    root.style.configure("Dark.TCheckbutton", background="#333333", foreground="white", font=("Helvetica", 10))
-    app = AdvancedDuplicateFileFinder(root)
-    root.mainloop()
+    main()
