@@ -19,6 +19,8 @@ class DuplicateFinder:
         self.window = None
         self.scanning = False
         self.scan_thread = None
+        self.paused = threading.Event()
+        self.paused.set()
 
     def calculate_image_hash(self, file_path):
         """Calculate the perceptual hash value of an image."""
@@ -48,6 +50,7 @@ class DuplicateFinder:
             for future in concurrent.futures.as_completed(futures):
                 if not self.scanning:
                     break
+                self.paused.wait()  # Wait if paused
                 try:
                     result = future.result()
                     if result:
@@ -63,6 +66,7 @@ class DuplicateFinder:
                     self.log_error(e)
 
         self.find_similar_images()
+        self.scanning = False
 
     def process_image(self, filepath):
         """Process a single image, calculating its hash value."""
@@ -103,7 +107,7 @@ class DuplicateFinder:
         for hash_value, filepaths in self.hashes.items():
             if len(filepaths) > 1:
                 for i, filepath1 in enumerate(filepaths):
-                    for filepath2 in filepaths[i+1:]:
+                    for filepath2 in filepaths[i + 1:]:
                         similarity = self.compare_images(filepath1, filepath2)
                         if similarity <= self.threshold:
                             if hash_value in self.duplicates:
@@ -172,16 +176,14 @@ class DuplicateFinder:
     def handle_pause(self):
         """Handle the pause button click event."""
         if self.scanning:
-            self.scanning = False
+            self.paused.clear()
             self.window["-STATUS-"].update("Scan paused.")
 
     def handle_resume(self, values):
         """Handle the resume button click event."""
-        if not self.scanning and self.scan_thread and self.scan_thread.is_alive():
-            self.scanning = True
+        if self.scanning and not self.paused.is_set():
+            self.paused.set()
             self.window["-STATUS-"].update("Resuming scan...")
-            self.scan_thread = threading.Thread(target=self.find_duplicates, args=(self.folder_path,))
-            self.scan_thread.start()
 
     def display_duplicates(self):
         """Display the list of duplicate files in the GUI."""
@@ -207,15 +209,16 @@ class DuplicateFinder:
             [sg.Button("Move Duplicates"), sg.InputText(key="-DEST-FOLDER-", size=(40, 1)), sg.FolderBrowse(target="-DEST-FOLDER-")]
         ]
 
-        self.window = sg.Window("Duplicate Images Finder", layout)
+        self.window = sg.Window("Duplicate Images Finder", layout, finalize=True)
         self.progress_bar = self.window["-PROGRESS-"]
 
         while True:
-            event, values = self.window.read()
+            event, values = self.window.read(timeout=100)
 
             if event == sg.WINDOW_CLOSED or event == "Cancel":
                 if self.scanning:
                     self.scanning = False
+                    self.paused.set()
                     self.scan_thread.join()
                 break
             elif event == "Scan":
@@ -226,9 +229,9 @@ class DuplicateFinder:
                 self.handle_resume(values)
             elif event == "-SAVE-":
                 self.handle_save(values)
-            elif event == "-DELETE-":
+            elif event == "Delete Duplicates":
                 self.handle_delete()
-            elif event == "-MOVE-":
+            elif event == "Move Duplicates":
                 self.handle_move(values)
 
         self.window.close()
@@ -242,6 +245,7 @@ class DuplicateFinder:
                     for filepath1, filepath2 in files_list:
                         f.write(f"{filepath1}\n{filepath2}\n\n")
             sg.popup("Duplicates list saved successfully!")
+
 
 if __name__ == "__main__":
     finder = DuplicateFinder()
